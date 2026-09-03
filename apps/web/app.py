@@ -16,10 +16,20 @@ API_BASE_URL = os.getenv(
     "http://127.0.0.1:8000",
 ).rstrip("/")
 
+PUBLIC_API_BASE_URL = os.getenv(
+    "WEB_PUBLIC_API_BASE_URL",
+    "http://127.0.0.1:8000",
+).rstrip("/")
+
 
 def api_url(path: str) -> str:
     """构造后端接口地址。"""
     return f"{API_BASE_URL}/{path.lstrip('/')}"
+
+
+def public_api_url(path: str) -> str:
+    """构造供用户浏览器访问的 API 地址。"""
+    return f"{PUBLIC_API_BASE_URL}/{path.lstrip('/')}"
 
 
 def get_json(
@@ -104,9 +114,20 @@ def format_error(exc: Exception) -> str:
 
     if isinstance(
         exc,
+        httpx.TimeoutException,
+    ):
+        return (
+            "ResearchPilot API 请求超时。"
+            "如果这是容器启动后的第一次问答，"
+            "模型可能仍在下载或加载；"
+            "请查看 API 日志，等待模型准备完成后重试。"
+        )
+
+    if isinstance(
+        exc,
         httpx.RequestError,
     ):
-        return "无法连接 ResearchPilot API。请确认 FastAPI 已启动。"
+        return "无法连接 ResearchPilot API。请检查 API 容器状态和日志。"
 
     return str(exc)
 
@@ -206,7 +227,9 @@ def render_qa_result(
             st.caption(score_text)
             st.write(evidence["text"])
 
-            source_url = api_url(f"/api/v1/documents/{evidence['document_id']}/source")
+            source_url = public_api_url(
+                f"/api/v1/documents/{evidence['document_id']}/source"
+            )
 
             page_start = evidence.get("page_start")
 
@@ -394,7 +417,9 @@ def render_experiment_result(
 
             st.write(evidence["text"])
 
-            source_url = api_url(f"/api/v1/documents/{evidence['document_id']}/source")
+            source_url = public_api_url(
+                f"/api/v1/documents/{evidence['document_id']}/source"
+            )
 
             page_start = evidence.get("page_start")
 
@@ -443,7 +468,9 @@ def render_document_tables(
             else:
                 st.info("系统记录了该表格的位置，但没有可显示的单元格内容。")
 
-            source_url = api_url(f"/api/v1/documents/{table['document_id']}/source")
+            source_url = public_api_url(
+                f"/api/v1/documents/{table['document_id']}/source"
+            )
 
             if page_no is not None:
                 source_url += f"#page={page_no}"
@@ -679,7 +706,7 @@ def main() -> None:
                 st.caption(f"索引时间：{selected_document['indexed_at']}")
                 st.caption(f"向量集合：{selected_document['collection_name']}")
 
-                source_url = api_url(
+                source_url = public_api_url(
                     f"/api/v1/documents/{selected_document['document_id']}/source"
                 )
 
@@ -809,7 +836,7 @@ def main() -> None:
                         result = post_json(
                             "/api/v1/qa/ask",
                             payload=payload,
-                            timeout=300.0,
+                            timeout=900.0,
                         )
 
                     st.session_state["last_qa_result"] = result

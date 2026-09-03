@@ -47,15 +47,10 @@ flowchart LR
 - Docker Compose
 - pytest、Ruff
 
+
 ## 快速启动
 
-### 1. 安装依赖
-
-```powershell
-uv sync
-```
-
-### 2. 创建环境配置
+### 1. 创建环境配置
 
 ```powershell
 Copy-Item .env.example .env
@@ -67,37 +62,69 @@ Copy-Item .env.example .env
 LLM_API_KEY=你的DeepSeek_API_Key
 ```
 
-使用 GPU 重排序器时设置：
+使用 GPU 时确认：
 
 ```ini
+EMBEDDING_DEVICE=cuda
+RERANKER_DEVICE=cuda
 RERANKER_ENABLED=true
 ```
 
-### 3. 启动 Qdrant
+### 2. Docker Compose 一键启动
 
 ```powershell
-docker compose up -d
+docker compose up -d --build
 ```
 
-Qdrant Dashboard：
+首次构建和首次问答需要下载 Python 依赖及本地模型，
+可能需要较长时间。
 
-```text
-http://localhost:6333/dashboard
+服务地址：
+
+- Web 工作台：http://127.0.0.1:8501
+- FastAPI 文档：http://127.0.0.1:8000/docs
+- Qdrant Dashboard：http://127.0.0.1:6333/dashboard
+
+查看状态：
+
+```powershell
+docker compose ps
 ```
 
-### 4. 启动 API
+查看 API 日志：
+
+```powershell
+docker compose logs --tail=100 api
+```
+
+停止服务：
+
+```powershell
+docker compose down
+```
+
+不要使用 `docker compose down -v`，除非确认需要删除
+Qdrant 数据卷和模型缓存。
+
+### 3. 本地开发模式
+
+仅启动 Qdrant：
+
+```powershell
+docker compose up -d qdrant
+```
+
+启动 FastAPI：
 
 ```powershell
 uv run uvicorn researchpilot.api.main:app --reload
 ```
 
-API 文档：
+启动 Streamlit：
 
-```text
-http://127.0.0.1:8000/docs
+```powershell
+uv run --extra web streamlit run apps/web/app.py
 ```
-
-首次执行文献解析或问答时需要下载本地模型，因此响应时间可能较长。
 
 ## 主要接口
 

@@ -1,3 +1,5 @@
+name: researchpilot
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.19.0
@@ -11,6 +13,98 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: researchpilot-api:local
+    container_name: researchpilot-api
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - .env
+
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      DATA_ROOT: /app/data
+      HF_HOME: /models/cache/huggingface
+      TORCH_HOME: /models/cache/torch
+      XDG_CACHE_HOME: /models/cache
+
+    depends_on:
+      qdrant:
+        condition: service_started
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      - ./data:/app/data
+      - model_cache:/models/cache
+
+    gpus: all
+
+    command:
+      - uvicorn
+      - researchpilot.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+
+    stop_grace_period: 30s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: researchpilot-web:local
+    container_name: researchpilot-web
+    restart: unless-stopped
+    init: true
+
+    environment:
+      WEB_API_BASE_URL: http://api:8000
+      WEB_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+
+    depends_on:
+      api:
+        condition: service_healthy
+
+    ports:
+      - "127.0.0.1:8501:8501"
+
+    command:
+      - streamlit
+      - run
+      - apps/web/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 20s
+
 volumes:
   qdrant_data:
     name: researchpilot_qdrant_data
+
+  model_cache:
+    name: researchpilot_model_cache
