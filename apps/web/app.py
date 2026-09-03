@@ -50,6 +50,21 @@ def post_json(
     return response.json()
 
 
+def delete_json(
+    path: str,
+    params: dict[str, Any] | None = None,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    """调用后端 DELETE 接口。"""
+    response = httpx.delete(
+        api_url(path),
+        params=params,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def upload_pdf(
     filename: str,
     content: bytes,
@@ -633,17 +648,120 @@ def main() -> None:
                     hide_index=True,
                 )
 
+                st.divider()
+                st.markdown("#### 文献详情与管理")
+
+                selected_library_label = st.selectbox(
+                    "选择一篇文献",
+                    options=list(document_by_label.keys()),
+                )
+
+                selected_document = document_by_label[selected_library_label]
+
+                detail_columns = st.columns(3)
+
+                detail_columns[0].metric(
+                    "页数",
+                    selected_document["page_count"],
+                )
+
+                detail_columns[1].metric(
+                    "文本块",
+                    selected_document["chunk_count"],
+                )
+
+                detail_columns[2].metric(
+                    "索引状态",
+                    selected_document["status"],
+                )
+
+                st.caption(f"文献 ID：{selected_document['document_id']}")
+                st.caption(f"索引时间：{selected_document['indexed_at']}")
+                st.caption(f"向量集合：{selected_document['collection_name']}")
+
+                source_url = api_url(
+                    f"/api/v1/documents/{selected_document['document_id']}/source"
+                )
+
+                st.link_button(
+                    "打开原始 PDF",
+                    source_url,
+                    key=(f"library_source_{selected_document['document_id']}"),
+                )
+
+                with st.expander("删除这篇文献"):
+                    st.warning(
+                        "删除后，该文献的向量会从 "
+                        "Qdrant 中移除，无法继续参与"
+                        "检索和分析。原始文件会移动到 "
+                        "data/trash，不会立即永久删除。"
+                    )
+
+                    st.write("请输入以下完整文件名确认：")
+                    st.code(selected_document["filename"])
+
+                    confirmation = st.text_input(
+                        "确认文件名",
+                        key=(f"delete_confirmation_{selected_document['document_id']}"),
+                    )
+
+                    understood = st.checkbox(
+                        "我确认删除这篇文献及其向量索引",
+                        key=(f"delete_understood_{selected_document['document_id']}"),
+                    )
+
+                    filename_matches = confirmation == selected_document["filename"]
+
+                    if confirmation and not filename_matches:
+                        st.caption("输入的文件名尚未完全匹配。")
+
+                    delete_clicked = st.button(
+                        "确认删除",
+                        type="primary",
+                        disabled=not (
+                            filename_matches and understood and health is not None
+                        ),
+                        key=(f"delete_document_{selected_document['document_id']}"),
+                    )
+
+                    if delete_clicked:
+                        try:
+                            with st.spinner("正在删除向量并移动本地文献文件……"):
+                                delete_result = delete_json(
+                                    "/api/v1/documents/"
+                                    f"{selected_document['document_id']}",
+                                    params={"confirm": "true"},
+                                )
+
+                            for state_key in [
+                                "last_qa_result",
+                                "last_experiment_result",
+                                "last_table_result",
+                                "table_document",
+                            ]:
+                                st.session_state.pop(
+                                    state_key,
+                                    None,
+                                )
+
+                            st.session_state["flash_message"] = (
+                                f"已移除 "
+                                f"{delete_result['filename']}，"
+                                f"删除 "
+                                f"{delete_result['deleted_point_count']} "
+                                f"条向量。原始文件已移动到 "
+                                f"data/trash/"
+                                f"{delete_result['trash_entry']}。"
+                            )
+
+                            st.rerun()
+
+                        except Exception as exc:
+                            st.error(format_error(exc))
+
     with qa_tab:
         st.subheader("基于文献证据提问")
         st.caption("可以限定一篇或多篇文献；不选择时将在全部文献中检索。")
-
-        # document_by_label = {
-        #     (
-        #         f"{document['filename']} · "
-        #         f"{document['document_id'][-8:]}"
-        #     ): document
-        #     for document in documents
-        # }
 
         with st.form("qa_form"):
             selected_labels = st.multiselect(
@@ -704,125 +822,121 @@ def main() -> None:
         if last_result is not None:
             render_qa_result(last_result)
 
-        with analysis_tab:
-            st.subheader("实验结果分析")
-            st.caption(
-                "选择 1～5 篇文献，提取实验设置、"
-                "数据集、指标、结果与限制；"
-                "选择多篇文献时还会生成跨文献比较。"
-            )
+    with analysis_tab:
+        st.subheader("实验结果分析")
+        st.caption(
+            "选择 1～5 篇文献，提取实验设置、"
+            "数据集、指标、结果与限制；"
+            "选择多篇文献时还会生成跨文献比较。"
+        )
 
-            if not documents:
-                st.info("当前没有可分析的文献，请先在文献库上传并索引 PDF。")
-            else:
-                with st.form("experiment_analysis_form"):
-                    selected_analysis_labels = st.multiselect(
-                        "选择需要分析的文献",
-                        options=list(document_by_label.keys()),
-                        max_selections=5,
-                    )
-
-                    analysis_focus = st.text_area(
-                        "重点分析内容（可选）",
-                        placeholder=(
-                            "例如：重点比较数据集、"
-                            "噪声设置、评价指标和"
-                            "不同方法的性能差异。"
-                        ),
-                        height=100,
-                    )
-
-                    top_k_per_document = st.slider(
-                        "每篇文献召回的正文证据数",
-                        min_value=4,
-                        max_value=15,
-                        value=8,
-                    )
-
-                    analyze_clicked = st.form_submit_button(
-                        "开始实验分析",
-                        type="primary",
-                        disabled=health is None,
-                    )
-
-                if analyze_clicked:
-                    if not selected_analysis_labels:
-                        st.warning("请至少选择一篇文献。")
-                    else:
-                        document_ids = [
-                            document_by_label[label]["document_id"]
-                            for label in selected_analysis_labels
-                        ]
-
-                        payload = {
-                            "document_ids": document_ids,
-                            "focus": (analysis_focus.strip() or None),
-                            "top_k_per_document": (top_k_per_document),
-                        }
-
-                        try:
-                            with st.spinner(
-                                "正在检索实验信息、读取表格并生成结构化分析……"
-                            ):
-                                result = post_json(
-                                    ("/api/v1/analysis/experiments"),
-                                    payload=payload,
-                                    timeout=600.0,
-                                )
-
-                            st.session_state["last_experiment_result"] = result
-
-                        except Exception as exc:
-                            st.error(format_error(exc))
-
-                last_experiment_result = st.session_state.get("last_experiment_result")
-
-                if last_experiment_result is not None:
-                    render_experiment_result(last_experiment_result)
-
-                st.divider()
-                st.subheader("原始结构化表格")
-                st.caption("查看 Docling 从论文中提取出的表格，用于人工核对模型分析。")
-
-                selected_table_label = st.selectbox(
-                    "选择一篇文献",
+        if not documents:
+            st.info("当前没有可分析的文献，请先在文献库上传并索引 PDF。")
+        else:
+            with st.form("experiment_analysis_form"):
+                selected_analysis_labels = st.multiselect(
+                    "选择需要分析的文献",
                     options=list(document_by_label.keys()),
-                    key="table_document",
+                    max_selections=5,
                 )
 
-                load_tables_clicked = st.button(
-                    "读取该文献的表格",
-                    key="load_document_tables",
+                analysis_focus = st.text_area(
+                    "重点分析内容（可选）",
+                    placeholder=(
+                        "例如：重点比较数据集、噪声设置、评价指标和不同方法的性能差异。"
+                    ),
+                    height=100,
                 )
 
-                if load_tables_clicked:
-                    selected_document = document_by_label[selected_table_label]
+                top_k_per_document = st.slider(
+                    "每篇文献召回的正文证据数",
+                    min_value=4,
+                    max_value=15,
+                    value=8,
+                )
+
+                analyze_clicked = st.form_submit_button(
+                    "开始实验分析",
+                    type="primary",
+                    disabled=health is None,
+                )
+
+            if analyze_clicked:
+                if not selected_analysis_labels:
+                    st.warning("请至少选择一篇文献。")
+                else:
+                    document_ids = [
+                        document_by_label[label]["document_id"]
+                        for label in selected_analysis_labels
+                    ]
+
+                    payload = {
+                        "document_ids": document_ids,
+                        "focus": (analysis_focus.strip() or None),
+                        "top_k_per_document": (top_k_per_document),
+                    }
 
                     try:
-                        with st.spinner("正在读取结构化表格……"):
-                            table_result = get_json(
-                                "/api/v1/documents/"
-                                f"{selected_document['document_id']}"
-                                "/tables",
-                                timeout=120.0,
+                        with st.spinner("正在检索实验信息、读取表格并生成结构化分析……"):
+                            result = post_json(
+                                ("/api/v1/analysis/experiments"),
+                                payload=payload,
+                                timeout=600.0,
                             )
 
-                        st.session_state["last_table_result"] = table_result
+                        st.session_state["last_experiment_result"] = result
 
                     except Exception as exc:
                         st.error(format_error(exc))
 
-                last_table_result = st.session_state.get("last_table_result")
+            last_experiment_result = st.session_state.get("last_experiment_result")
 
-                selected_document_id = document_by_label[selected_table_label][
-                    "document_id"
-                ]
+            if last_experiment_result is not None:
+                render_experiment_result(last_experiment_result)
 
-                if (
-                    last_table_result is not None
-                    and last_table_result["document_id"] == selected_document_id
-                ):
-                    render_document_tables(last_table_result)
+            st.divider()
+            st.subheader("原始结构化表格")
+            st.caption("查看 Docling 从论文中提取出的表格，用于人工核对模型分析。")
+
+            selected_table_label = st.selectbox(
+                "选择一篇文献",
+                options=list(document_by_label.keys()),
+                key="table_document",
+            )
+
+            load_tables_clicked = st.button(
+                "读取该文献的表格",
+                key="load_document_tables",
+            )
+
+            if load_tables_clicked:
+                selected_document = document_by_label[selected_table_label]
+
+                try:
+                    with st.spinner("正在读取结构化表格……"):
+                        table_result = get_json(
+                            "/api/v1/documents/"
+                            f"{selected_document['document_id']}"
+                            "/tables",
+                            timeout=120.0,
+                        )
+
+                    st.session_state["last_table_result"] = table_result
+
+                except Exception as exc:
+                    st.error(format_error(exc))
+
+            last_table_result = st.session_state.get("last_table_result")
+
+            selected_document_id = document_by_label[selected_table_label][
+                "document_id"
+            ]
+
+            if (
+                last_table_result is not None
+                and last_table_result["document_id"] == selected_document_id
+            ):
+                render_document_tables(last_table_result)
 
 
 if __name__ == "__main__":
