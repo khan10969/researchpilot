@@ -1,0 +1,52 @@
+{
+  "baseline_name": "v0.4-multi-query-reranker",
+  "source_run_id": "20260903_201027",
+  "evaluation": {
+    "suite": "all",
+    "case_count": 24,
+    "qa_top_k": 10,
+    "analysis_top_k_per_document": 8
+  },
+  "generation": {
+    "llm_provider": "deepseek",
+    "llm_model": "deepseek-v4-flash",
+    "judge_model": "deepseek-v4-flash",
+    "temperature": 0.0
+  },
+  "retrieval": {
+    "embedding_model": "BAAI/bge-m3",
+    "multi_query_candidate_k": 6,
+    "rrf_k": 60,
+    "query_diversity_k_per_document": 2,
+    "table_top_k_per_document": 2
+  },
+  "reranker": {
+    "enabled": true,
+    "model": "BAAI/bge-reranker-v2-m3",
+    "device": "cuda",
+    "batch_size": 4,
+    "max_length": 512,
+    "single_document_policy": "rerank_and_prune_to_top_k",
+    "multi_document_policy": "rerank_full_rrf_candidate_pool_without_pruning"
+  },
+  "runtime": {
+    "python": "3.12.14",
+    "torch": "2.13.0+cu132",
+    "sentence_transformers": "6.0.1",
+    "qdrant_client": "1.19.0",
+    "docling": "2.124.0",
+    "openai": "3.7.0",
+    "pydantic": "2.13.5",
+    "fastapi": "0.141.1",
+    "uvicorn": "0.52.4"
+  },
+  "known_failures": {
+    "deterministic": [
+      "qa_cross_architecture_rnn_001"
+    ],
+    "semantic": [
+      "qa_cross_architecture_rnn_001",
+      "exp_partial_accuracy_efficiency_001"
+    ]
+  }
+}

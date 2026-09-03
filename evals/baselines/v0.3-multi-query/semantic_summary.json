@@ -1,0 +1,33 @@
+{
+  "source_run_dir": "D:\\Code_for_Agent\\researchpilot\\evals\\runs\\20260903_163502",
+  "case_count": 24,
+  "judged_count": 24,
+  "skipped_count": 0,
+  "judge_failed_count": 0,
+  "semantic_passed_count": 21,
+  "semantic_pass_rate": 0.875,
+  "gold_point_count": 74,
+  "gold_point_coverage": 0.9459459459459459,
+  "expected_limitation_count": 23,
+  "limitation_coverage": 1.0,
+  "forbidden_claim_count": 53,
+  "forbidden_violation_count": 0,
+  "forbidden_claim_safety": 1.0,
+  "by_answerability": {
+    "full": {
+      "case_count": 16,
+      "passed_count": 14,
+      "pass_rate": 0.875
+    },
+    "partial": {
+      "case_count": 4,
+      "passed_count": 3,
+      "pass_rate": 0.75
+    },
+    "none": {
+      "case_count": 4,
+      "passed_count": 4,
+      "pass_rate": 1.0
+    }
+  }
+}

@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Test, lint and type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files and logs
+tmp/
+*.log
+
+# Runtime and generated document data
+data/artifacts/
+data/chunks/
+data/documents/
+data/incoming/
+data/trash/
+
+# Do not publish third-party paper PDFs
+data/samples/*.pdf
+
+# Evaluation runtime outputs
+evals/runs/
+
+# Baselines retain summaries and reports in Git,
+# but raw responses may contain long paper excerpts.
+evals/baselines/**/results.jsonl
+evals/baselines/**/semantic_results.jsonl
