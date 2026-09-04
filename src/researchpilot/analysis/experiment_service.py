@@ -21,15 +21,15 @@ from researchpilot.documents.service import (
 from researchpilot.llm_utils import (
     retry_structured_output,
 )
+from researchpilot.observability import (
+    get_logger,
+    timed_stage,
+)
 from researchpilot.retrieval.embeddings import (
     EmbeddingService,
 )
 from researchpilot.storage.qdrant_store import (
     QdrantStore,
-)
-from researchpilot.observability import (
-    get_logger,
-    timed_stage,
 )
 
 logger = get_logger(__name__)

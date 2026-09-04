@@ -8,6 +8,10 @@ from researchpilot.llm_utils import (
     ModelOutputError,
     retry_structured_output,
 )
+from researchpilot.observability import (
+    get_logger,
+    timed_stage,
+)
 from researchpilot.rag.fusion import (
     point_key,
     reciprocal_rank_fusion,
@@ -24,11 +28,6 @@ from researchpilot.rag.reranker import (
 )
 from researchpilot.retrieval.embeddings import EmbeddingService
 from researchpilot.storage.qdrant_store import QdrantStore
-
-from researchpilot.observability import (
-    get_logger,
-    timed_stage,
-)
 
 # logger = logging.getLogger(__name__)
 logger = get_logger(__name__)

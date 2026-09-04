@@ -1,5 +1,6 @@
 from pathlib import Path
 from time import perf_counter
+
 from fastapi import (
     Depends,
     FastAPI,
@@ -53,10 +54,6 @@ from researchpilot.ingestion.service import (
 from researchpilot.llm_utils import (
     ModelOutputError,
 )
-from researchpilot.rag.models import RAGResult
-from researchpilot.rag.service import RAGService
-from researchpilot.storage.qdrant_store import QdrantStore
-
 from researchpilot.observability import (
     bind_request_id,
     configure_logging,
@@ -64,6 +61,9 @@ from researchpilot.observability import (
     reset_request_id,
     resolve_request_id,
 )
+from researchpilot.rag.models import RAGResult
+from researchpilot.rag.service import RAGService
+from researchpilot.storage.qdrant_store import QdrantStore
 
 configure_logging()
 api_logger = get_logger(__name__)
