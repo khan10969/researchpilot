@@ -569,7 +569,7 @@ def main() -> None:
             st.caption(health_error)
 
         st.divider()
-        st.caption(f"API：{API_BASE_URL}")
+        st.caption(f"API：{PUBLIC_API_BASE_URL}")
 
     documents: list[dict[str, Any]] = []
     documents_error: str | None = None

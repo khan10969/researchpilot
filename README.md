@@ -30,14 +30,16 @@ ResearchPilot 是一个面向科研论文与实验结果的证据驱动 Agent
 系统能够限定多篇文献进行检索，比较不同方法的技术路线，
 并明确说明实验设置和结果的可比性边界。
 
-![跨文献证据问答](docs/assets/02-cross-document-qa.png)
+![跨文献证据问答](docs/assets/02-cross-document-qa-01.png)
+![跨文献证据问答](docs/assets/02-cross-document-qa-02.png)
+
 
 ### 可定位引用
 
 回答中的结论能够定位到具体文献、章节、页码和证据原文，
 并可继续打开原始 PDF 核验。
 
-![可定位证据](docs/assets/03-traceable-evidence.png)
+![可定位证据](docs/assets/02-cross-document-qa-03.png)
 
 <details>
 <summary>查看更多：证据不足识别与实验分析</summary>
@@ -47,7 +49,8 @@ ResearchPilot 是一个面向科研论文与实验结果的证据驱动 Agent
 当文献没有包含问题所需实验时，系统会说明缺少的证据，
 避免将其他平台或实验条件下的结果直接套用。
 
-![证据不足识别](docs/assets/04-insufficient-evidence.png)
+![证据不足识别](docs/assets/03-insufficient-evidence-01.png)
+![证据不足识别](docs/assets/03-insufficient-evidence-02.png)
 
 ### 跨文献实验分析
 
