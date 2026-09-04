@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import Any
 
 from openai import APIError, OpenAI
@@ -26,7 +25,13 @@ from researchpilot.rag.reranker import (
 from researchpilot.retrieval.embeddings import EmbeddingService
 from researchpilot.storage.qdrant_store import QdrantStore
 
-logger = logging.getLogger(__name__)
+from researchpilot.observability import (
+    get_logger,
+    timed_stage,
+)
+
+# logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # TABLE_QUERY_HINTS = (
 #     "表",
@@ -95,23 +100,17 @@ class RAGService:
     """执行检索、生成答案和引用验证。"""
 
     def __init__(
-            self,
-            embedding_service: (
-                    EmbeddingService | None
-            ) = None,
-            store: QdrantStore | None = None,
-            reranker_service: (
-                    RerankerService | None
-            ) = None,
+        self,
+        embedding_service: (EmbeddingService | None) = None,
+        store: QdrantStore | None = None,
+        reranker_service: (RerankerService | None) = None,
     ) -> None:
         # if settings.openai_api_key is None:
         #     raise RuntimeError(
         #         "没有配置 OPENAI_API_KEY，请检查项目根目录下的 .env"
         #     )
         if settings.llm_api_key is None:
-            raise RuntimeError(
-                "没有配置 LLM_API_KEY，请检查项目根目录下的 .env"
-            )
+            raise RuntimeError("没有配置 LLM_API_KEY，请检查项目根目录下的 .env")
 
         # api_key = (
         #     settings.openai_api_key.get_secret_value()
@@ -121,15 +120,9 @@ class RAGService:
         # self.embedding_service = EmbeddingService()
         # self.store = QdrantStore()
 
-        self.embedding_service = (
-                embedding_service
-                or EmbeddingService()
-        )
+        self.embedding_service = embedding_service or EmbeddingService()
 
-        self.store = (
-                store
-                or QdrantStore()
-        )
+        self.store = store or QdrantStore()
 
         # self.openai_client = OpenAI(
         #     api_key=api_key,
@@ -146,36 +139,27 @@ class RAGService:
         self.query_planner = QueryPlanner(client=self.llm_client)
         self.reranker_service = reranker_service
 
-        if (
-                settings.reranker_enabled
-                and self.reranker_service is None
-        ):
-            self.reranker_service = (
-                RerankerService()
-            )
+        if settings.reranker_enabled and self.reranker_service is None:
+            self.reranker_service = RerankerService()
 
     def _search_points(
-            self,
-            query_vector: Any,
-            limit: int,
-            document_ids: list[str] | None,
+        self,
+        query_vector: Any,
+        limit: int,
+        document_ids: list[str] | None,
     ) -> list[Any]:
         """
         单篇文献使用普通检索；
         多篇文献时，为每篇文献分配检索名额。
         """
 
-        cleaned_document_ids = list(
-            dict.fromkeys(document_ids or [])
-        )
+        cleaned_document_ids = list(dict.fromkeys(document_ids or []))
 
         if len(cleaned_document_ids) <= 1:
             return self.store.search(
                 query_vector=query_vector,
                 limit=limit,
-                document_ids=(
-                        cleaned_document_ids or None
-                ),
+                document_ids=(cleaned_document_ids or None),
             )
 
         # 如果 top_k 小于文献数，也保证每篇至少召回一条。
@@ -191,13 +175,8 @@ class RAGService:
 
         points: list[Any] = []
 
-        for index, document_id in enumerate(
-                cleaned_document_ids
-        ):
-            document_limit = (
-                    base_quota
-                    + (1 if index < remainder else 0)
-            )
+        for index, document_id in enumerate(cleaned_document_ids):
+            document_limit = base_quota + (1 if index < remainder else 0)
 
             document_points = self.store.search(
                 query_vector=query_vector,
@@ -214,25 +193,21 @@ class RAGService:
         )
 
     """判断是否需要表格"""
+
     @staticmethod
     def _needs_table_evidence(
-            query: str,
+        query: str,
     ) -> bool:
-        normalized_query = (
-            query.casefold()
-            .replace(" ", "")
-        )
+        normalized_query = query.casefold().replace(" ", "")
 
-        return any(
-            hint in normalized_query
-            for hint in TABLE_QUERY_HINTS
-        )
+        return any(hint in normalized_query for hint in TABLE_QUERY_HINTS)
 
     """检索表格块"""
+
     def _search_table_points(
-            self,
-            query_vector: Any,
-            document_ids: list[str] | None,
+        self,
+        query_vector: Any,
+        document_ids: list[str] | None,
     ) -> list[Any]:
         """
         每篇指定文献单独检索表格，
@@ -244,19 +219,14 @@ class RAGService:
             # 防止从全部文献中加入过多表格。
             return []
 
-        cleaned_document_ids = list(
-            dict.fromkeys(document_ids)
-        )
+        cleaned_document_ids = list(dict.fromkeys(document_ids))
 
         table_points: list[Any] = []
 
         for document_id in cleaned_document_ids:
             points = self.store.search(
                 query_vector=query_vector,
-                limit=(
-                    settings
-                    .rag_table_top_k_per_document
-                ),
+                limit=(settings.rag_table_top_k_per_document),
                 document_ids=[document_id],
                 element_type="table",
             )
@@ -266,10 +236,11 @@ class RAGService:
         return table_points
 
     """合并并去重"""
+
     @staticmethod
     def _merge_points(
-            primary_points: list[Any],
-            extra_points: list[Any],
+        primary_points: list[Any],
+        extra_points: list[Any],
     ) -> list[Any]:
         """根据 chunk_id 合并检索结果。"""
 
@@ -290,11 +261,7 @@ class RAGService:
 
             existing = candidates.get(chunk_id)
 
-            if (
-                    existing is None
-                    or float(point.score)
-                    > float(existing.score)
-            ):
+            if existing is None or float(point.score) > float(existing.score):
                 candidates[chunk_id] = point
 
         return sorted(
@@ -302,8 +269,6 @@ class RAGService:
             key=lambda point: float(point.score),
             reverse=True,
         )
-
-
 
     def retrieve(
         self,
@@ -314,9 +279,7 @@ class RAGService:
     ) -> list[RetrievedEvidence]:
         """从 Qdrant 召回证据。"""
 
-        if not self.store.client.collection_exists(
-            self.store.collection_name
-        ):
+        if not self.store.client.collection_exists(self.store.collection_name):
             raise RuntimeError(
                 f"Collection {self.store.collection_name} 不存在，"
                 "请先运行 index_chunks.py"
@@ -344,9 +307,7 @@ class RAGService:
         queries = retrieval_queries or [query]
 
         if len(queries) == 1:
-            query_vectors = [
-                self.embedding_service.encode_query(queries[0])
-            ]
+            query_vectors = [self.embedding_service.encode_query(queries[0])]
 
             points = self._search_points(
                 query_vector=query_vectors[0],
@@ -362,8 +323,6 @@ class RAGService:
                 limit=limit,
                 document_ids=document_ids,
             )
-
-
 
         # if self._needs_table_evidence(query):
         #     table_points = (
@@ -394,13 +353,9 @@ class RAGService:
                 extra_points=table_points,
             )
 
-
         ##################################################
-        #在 retrieve() 中执行重排序
-        needs_table = any(
-            self._needs_table_evidence(item)
-            for item in queries
-        )
+        # 在 retrieve() 中执行重排序
+        needs_table = any(self._needs_table_evidence(item) for item in queries)
 
         # 单查询仍按照用户要求截取；
         # 多查询代表问题包含多个检索维度，
@@ -412,34 +367,27 @@ class RAGService:
 
         rerank_scores: dict[str, float] = {}
 
-        if (
-                self.reranker_service is not None
-                and points
-        ):
+        if self.reranker_service is not None and points:
             original_points = points
 
             try:
-                points, rerank_scores = (
-                    self.reranker_service
-                    .rerank_points(
-                        query=query,
-                        points=points,
-                        top_k=rerank_output_limit,
-                        document_ids=document_ids,
-                        require_table=needs_table,
-                        queries=queries,
-                    )
+                points, rerank_scores = self.reranker_service.rerank_points(
+                    query=query,
+                    points=points,
+                    top_k=rerank_output_limit,
+                    document_ids=document_ids,
+                    require_table=needs_table,
+                    queries=queries,
                 )
             except (RuntimeError, ValueError) as exc:
                 logger.warning(
-                    "重排序失败，继续使用原RRF结果：%s",
-                    exc,
+                    "reranker_fallback",
+                    error=str(exc),
                 )
 
                 points = original_points
                 rerank_scores = {}
         #################################################
-
 
         evidences: list[RetrievedEvidence] = []
 
@@ -453,13 +401,9 @@ class RAGService:
                 RetrievedEvidence(
                     evidence_id=index,
                     score=float(point.score),
-                    rerank_score=rerank_scores.get(
-                        point_key(point)
-                    ),
+                    rerank_score=rerank_scores.get(point_key(point)),
                     document_id=str(payload.get("document_id", "")),
-                    chunk_id=str(
-                        payload.get("chunk_id", "")
-                    ),
+                    chunk_id=str(payload.get("chunk_id", "")),
                     source_file=str(
                         payload.get(
                             "source_file",
@@ -472,15 +416,9 @@ class RAGService:
                             "未知章节",
                         )
                     ),
-                    page_start=payload.get(
-                        "page_start"
-                    ),
-                    page_end=payload.get(
-                        "page_end"
-                    ),
-                    text=str(
-                        payload.get("text", "")
-                    ),
+                    page_start=payload.get("page_start"),
+                    page_end=payload.get("page_end"),
+                    text=str(payload.get("text", "")),
                     source_locations=payload.get(
                         "source_locations",
                         [],
@@ -532,14 +470,9 @@ class RAGService:
     ) -> None:
         """检查大模型是否引用了不存在的证据编号。"""
 
-        valid_ids = {
-            evidence.evidence_id
-            for evidence in evidences
-        }
+        valid_ids = {evidence.evidence_id for evidence in evidences}
 
-        cited_ids = set(
-            answer.overview_evidence_ids
-        )
+        cited_ids = set(answer.overview_evidence_ids)
 
         for claim in answer.claims:
             cited_ids.update(claim.evidence_ids)
@@ -547,19 +480,14 @@ class RAGService:
         invalid_ids = cited_ids - valid_ids
 
         if invalid_ids:
-            raise RuntimeError(
-                "模型返回了不存在的证据编号："
-                f"{sorted(invalid_ids)}"
-            )
+            raise RuntimeError(f"模型返回了不存在的证据编号：{sorted(invalid_ids)}")
 
         if (
             answer.sufficient_evidence
             and answer.overview.strip()
             and not answer.overview_evidence_ids
         ):
-            raise RuntimeError(
-                "模型认为证据充分，但概述没有引用证据"
-            )
+            raise RuntimeError("模型认为证据充分，但概述没有引用证据")
 
     def answer(
         self,
@@ -583,40 +511,75 @@ class RAGService:
 
         unique_document_ids = list(dict.fromkeys(document_ids or []))
 
-        if len(unique_document_ids) > 1:
-            try:
-                retrieval_queries = self.query_planner.plan(
-                    query=query,
-                    document_count=len(unique_document_ids),
-                )
-            # except (APIError, ModelOutputError):
-            #     # 查询规划失败不应该导致整个问答请求失败
-            #     retrieval_queries = [query]
-            # except (APIError, ModelOutputError):
-            #     retrieval_queries = (
-            #         self.query_planner.fallback_plan(query)
-            #     )
-            except (APIError, ModelOutputError) as exc:
-                logger.warning(
-                    "查询规划失败，改用确定性备用计划：%s",
-                    exc,
-                )
+        # if len(unique_document_ids) > 1:
+        #     try:
+        #         retrieval_queries = self.query_planner.plan(
+        #             query=query,
+        #             document_count=len(unique_document_ids),
+        #         )
+        #     # except (APIError, ModelOutputError):
+        #     #     # 查询规划失败不应该导致整个问答请求失败
+        #     #     retrieval_queries = [query]
+        #     # except (APIError, ModelOutputError):
+        #     #     retrieval_queries = (
+        #     #         self.query_planner.fallback_plan(query)
+        #     #     )
+        #     except (APIError, ModelOutputError) as exc:
+        #         logger.warning(
+        #             "query_planning_fallback",
+        #             error=str(exc),
+        #         )
+        #
+        #         retrieval_queries = (
+        #             self.query_planner.fallback_plan(query)
+        #         )
 
-                retrieval_queries = (
-                    self.query_planner.fallback_plan(query)
-                )
+        if len(unique_document_ids) > 1:
+            with timed_stage(
+                logger,
+                "query_planning",
+                document_count=len(unique_document_ids),
+            ):
+                try:
+                    retrieval_queries = self.query_planner.plan(
+                        query=query,
+                        document_count=len(unique_document_ids),
+                    )
+                except (
+                    APIError,
+                    ModelOutputError,
+                ) as exc:
+                    logger.warning(
+                        "query_planning_fallback",
+                        error=str(exc),
+                    )
+
+                    retrieval_queries = self.query_planner.fallback_plan(query)
 
         # evidences = self.retrieve(
         #     query=query,
         #     limit=limit,
         #     document_ids=document_ids,
         # )
-        evidences = self.retrieve(
-            query=query,
-            limit=limit,
-            document_ids=document_ids,
-            retrieval_queries=retrieval_queries,
-        )
+        # evidences = self.retrieve(
+        #     query=query,
+        #     limit=limit,
+        #     document_ids=document_ids,
+        #     retrieval_queries=retrieval_queries,
+        # )
+
+        with timed_stage(
+            logger,
+            "evidence_retrieval",
+            query_count=len(retrieval_queries),
+            document_count=len(unique_document_ids),
+        ):
+            evidences = self.retrieve(
+                query=query,
+                limit=limit,
+                document_ids=document_ids,
+                retrieval_queries=(retrieval_queries),
+            )
 
         if not evidences:
             return RAGResult(
@@ -628,9 +591,7 @@ class RAGService:
                     overview="没有检索到可用于回答问题的文献证据。",
                     overview_evidence_ids=[],
                     claims=[],
-                    limitations=[
-                        "当前向量库中没有相关证据。"
-                    ],
+                    limitations=["当前向量库中没有相关证据。"],
                 ),
                 evidences=[],
             )
@@ -653,26 +614,24 @@ class RAGService:
 
         if len(retrieval_queries) > 1:
             retrieval_plan_text = (
-                    "\n以下子问题仅用于扩大证据召回范围，"
-                    "不代表用户提出了新的要求：\n"
-                    + json.dumps(
-                retrieval_queries[1:],
-                ensure_ascii=False,
-                indent=2,
-            )
-                    + "\n回答时必须以原始用户问题作为唯一任务范围。"
-                    + "\n如果某个检索子问题引入了原问题没有要求的"
-                      "指标、参数、实验细节或比较维度，可以忽略这些内容。"
-                    + "\n不得仅仅因为这些额外检索细节缺失，"
-                      "就将 sufficient_evidence 设为 false。"
-                    + "\n判断 sufficient_evidence 时，"
-                      "只检查原始用户问题明确要求的核心事实是否有证据支持。"
-                    + "\n这些检索子问题不是事实证据，不得引用。\n"
+                "\n以下子问题仅用于扩大证据召回范围，"
+                "不代表用户提出了新的要求：\n"
+                + json.dumps(
+                    retrieval_queries[1:],
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n回答时必须以原始用户问题作为唯一任务范围。"
+                + "\n如果某个检索子问题引入了原问题没有要求的"
+                "指标、参数、实验细节或比较维度，可以忽略这些内容。"
+                + "\n不得仅仅因为这些额外检索细节缺失，"
+                "就将 sufficient_evidence 设为 false。"
+                + "\n判断 sufficient_evidence 时，"
+                "只检查原始用户问题明确要求的核心事实是否有证据支持。"
+                + "\n这些检索子问题不是事实证据，不得引用。\n"
             )
         #######################################################
-        evidence_context = (
-            self._build_evidence_context(evidences)
-        )
+        evidence_context = self._build_evidence_context(evidences)
 
         user_input = f"""
 用户问题：
@@ -726,9 +685,7 @@ class RAGService:
                 instructions=SYSTEM_INSTRUCTIONS,
                 input=user_input,
                 text_format=GroundedAnswer,
-                max_output_tokens=(
-                    settings.rag_max_output_tokens
-                ),
+                max_output_tokens=(settings.rag_max_output_tokens),
                 temperature=settings.llm_temperature,
                 reasoning={
                     "effort": "none",
@@ -738,9 +695,7 @@ class RAGService:
             parsed = response.output_parsed
 
             if parsed is None:
-                raise RuntimeError(
-                    "大模型没有返回可解析的结构化结果"
-                )
+                raise RuntimeError("大模型没有返回可解析的结构化结果")
 
             self._validate_citations(
                 answer=parsed,
@@ -749,13 +704,24 @@ class RAGService:
 
             return parsed
 
-        parsed_answer = retry_structured_output(
-            generate_answer,
-            attempts=(
-                settings.llm_structured_max_attempts
-            ),
-            label="文献问答",
-        )
+        # parsed_answer = retry_structured_output(
+        #     generate_answer,
+        #     attempts=(
+        #         settings.llm_structured_max_attempts
+        #     ),
+        #     label="文献问答",
+        # )
+
+        with timed_stage(
+            logger,
+            "answer_generation",
+            evidence_count=len(evidences),
+        ):
+            parsed_answer = retry_structured_output(
+                generate_answer,
+                attempts=(settings.llm_structured_max_attempts),
+                label="文献问答",
+            )
 
         return RAGResult(
             query=query,
@@ -765,13 +731,12 @@ class RAGService:
             evidences=evidences,
         )
 
-
     ####################################
     def _search_multi_query_points(
-            self,
-            query_vectors: list[Any],
-            limit: int,
-            document_ids: list[str] | None,
+        self,
+        query_vectors: list[Any],
+        limit: int,
+        document_ids: list[str] | None,
     ) -> list[Any]:
         """
         对每个查询向量分别检索，然后使用 RRF 融合。
@@ -798,10 +763,7 @@ class RAGService:
             return reciprocal_rank_fusion_with_diversity(
                 rankings,
                 limit=limit,
-                extra_limit=(
-                    settings
-                    .rag_query_diversity_k_per_document
-                ),
+                extra_limit=(settings.rag_query_diversity_k_per_document),
                 rrf_k=settings.rag_rrf_k,
             )
 
@@ -836,16 +798,11 @@ class RAGService:
             #
             # selected_points.extend(fused_points[:document_quota])
 
-            document_points = (
-                reciprocal_rank_fusion_with_diversity(
-                    rankings,
-                    limit=document_quota,
-                    extra_limit=(
-                        settings
-                        .rag_query_diversity_k_per_document
-                    ),
-                    rrf_k=settings.rag_rrf_k,
-                )
+            document_points = reciprocal_rank_fusion_with_diversity(
+                rankings,
+                limit=document_quota,
+                extra_limit=(settings.rag_query_diversity_k_per_document),
+                rrf_k=settings.rag_rrf_k,
             )
 
             selected_points.extend(document_points)
@@ -853,9 +810,9 @@ class RAGService:
         return selected_points
 
     def _search_multi_query_table_points(
-            self,
-            query_vectors: list[Any],
-            document_ids: list[str] | None,
+        self,
+        query_vectors: list[Any],
+        document_ids: list[str] | None,
     ) -> list[Any]:
         clean_document_ids = list(dict.fromkeys(document_ids or []))
 
@@ -887,8 +844,8 @@ class RAGService:
 
     @staticmethod
     def _append_unique_points(
-            primary_points: list[Any],
-            extra_points: list[Any],
+        primary_points: list[Any],
+        extra_points: list[Any],
     ) -> list[Any]:
         result: list[Any] = []
         seen: set[str] = set()
@@ -921,10 +878,7 @@ def _format_pages(
 def _citation_marks(
     evidence_ids: list[int],
 ) -> str:
-    return "".join(
-        f"[证据{evidence_id}]"
-        for evidence_id in evidence_ids
-    )
+    return "".join(f"[证据{evidence_id}]" for evidence_id in evidence_ids)
 
 
 def render_result(result: RAGResult) -> str:
@@ -937,13 +891,9 @@ def render_result(result: RAGResult) -> str:
     lines.append("")
     lines.append("回答：")
 
-    overview_citations = _citation_marks(
-        answer.overview_evidence_ids
-    )
+    overview_citations = _citation_marks(answer.overview_evidence_ids)
 
-    lines.append(
-        f"{answer.overview} {overview_citations}".strip()
-    )
+    lines.append(f"{answer.overview} {overview_citations}".strip())
 
     if answer.claims:
         lines.append("")
@@ -953,13 +903,9 @@ def render_result(result: RAGResult) -> str:
             answer.claims,
             start=1,
         ):
-            citations = _citation_marks(
-                claim.evidence_ids
-            )
+            citations = _citation_marks(claim.evidence_ids)
 
-            lines.append(
-                f"{index}. {claim.statement} {citations}"
-            )
+            lines.append(f"{index}. {claim.statement} {citations}")
 
     if answer.limitations:
         lines.append("")
@@ -984,15 +930,10 @@ def render_result(result: RAGResult) -> str:
         #     f"{pages} | "
         #     f"检索相似度 {evidence.score:.4f}"
         # )
-        score_text = (
-            f"检索相似度 {evidence.score:.4f}"
-        )
+        score_text = f"检索相似度 {evidence.score:.4f}"
 
         if evidence.rerank_score is not None:
-            score_text += (
-                " | 重排序分数 "
-                f"{evidence.rerank_score:.4f}"
-            )
+            score_text += f" | 重排序分数 {evidence.rerank_score:.4f}"
 
         lines.append(
             f"[证据{evidence.evidence_id}] "
@@ -1003,6 +944,3 @@ def render_result(result: RAGResult) -> str:
         )
 
     return "\n".join(lines)
-
-
-

@@ -1,10 +1,12 @@
 from pathlib import Path
-
+from time import perf_counter
 from fastapi import (
     Depends,
     FastAPI,
     File,
     HTTPException,
+    Request,
+    Response,
     UploadFile,
     status,
 )
@@ -55,13 +57,76 @@ from researchpilot.rag.models import RAGResult
 from researchpilot.rag.service import RAGService
 from researchpilot.storage.qdrant_store import QdrantStore
 
+from researchpilot.observability import (
+    bind_request_id,
+    configure_logging,
+    get_logger,
+    reset_request_id,
+    resolve_request_id,
+)
+
+configure_logging()
+api_logger = get_logger(__name__)
+
 app = FastAPI(
     title="ResearchPilot API",
-    description=(
-        "面向科研文献的证据检索与可定位引用问答服务"
-    ),
-    version = "0.1.0",
+    description=("面向科研文献的证据检索与可定位引用问答服务"),
+    version="0.1.0",
 )
+
+
+######################################################################
+@app.middleware("http")
+async def observe_request(
+    request: Request,
+    call_next,
+) -> Response:
+    """为每个 HTTP 请求添加编号和耗时日志。"""
+    request_id = resolve_request_id(request.headers.get("X-Request-ID"))
+    token = bind_request_id(request_id)
+    started = perf_counter()
+
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = round(
+            (perf_counter() - started) * 1000,
+            2,
+        )
+
+        api_logger.exception(
+            "request_failed",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            duration_ms=duration_ms,
+        )
+        raise
+    else:
+        duration_ms = round(
+            (perf_counter() - started) * 1000,
+            2,
+        )
+
+        response.headers["X-Request-ID"] = request_id
+        response.headers["Server-Timing"] = f"app;dur={duration_ms}"
+
+        if request.url.path != "/api/v1/health":
+            api_logger.info(
+                "request_completed",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=(response.status_code),
+                duration_ms=duration_ms,
+            )
+
+        return response
+    finally:
+        reset_request_id(token)
+
+
+#####################################################################
 
 
 @app.get(
@@ -89,17 +154,9 @@ def health() -> HealthResponse:
         # 发起一次真实请求，确认 Qdrant 可访问
         store.client.get_collections()
 
-        collection_exists = (
-            store.client.collection_exists(
-                store.collection_name
-            )
-        )
+        collection_exists = store.client.collection_exists(store.collection_name)
 
-        point_count = (
-            store.count_points()
-            if collection_exists
-            else 0
-        )
+        point_count = store.count_points() if collection_exists else 0
 
         return HealthResponse(
             status="ok",
@@ -125,9 +182,7 @@ def health() -> HealthResponse:
 )
 def ask_question(
     request: AskRequest,
-    service: RAGService = Depends(
-        get_rag_service
-    ),
+    service: RAGService = Depends(get_rag_service),
 ) -> RAGResult:
     try:
         return service.answer(
@@ -153,7 +208,7 @@ def ask_question(
             status_code=502,
             detail=str(exc),
         ) from exc
-    
+
     except RuntimeError as exc:
         raise HTTPException(
             status_code=503,
@@ -169,13 +224,9 @@ def ask_question(
 )
 def upload_document(
     file: UploadFile = File(...),
-    service: DocumentIngestionService = Depends(
-        get_ingestion_service
-    ),
+    service: DocumentIngestionService = Depends(get_ingestion_service),
 ) -> DocumentIndexResult:
-    filename = Path(
-        file.filename or ""
-    ).name
+    filename = Path(file.filename or "").name
 
     if not filename:
         raise HTTPException(
@@ -189,24 +240,15 @@ def upload_document(
             detail="当前只支持 PDF 文件",
         )
 
-    max_size_bytes = (
-        settings.max_upload_size_mb
-        * 1024
-        * 1024
-    )
+    max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
 
     # 多读取一个字节，用于判断是否超过限制
-    content = file.file.read(
-        max_size_bytes + 1
-    )
+    content = file.file.read(max_size_bytes + 1)
 
     if len(content) > max_size_bytes:
         raise HTTPException(
             status_code=413,
-            detail=(
-                "文件过大，当前最大允许 "
-                f"{settings.max_upload_size_mb} MB"
-            ),
+            detail=(f"文件过大，当前最大允许 {settings.max_upload_size_mb} MB"),
         )
 
     if not content:
@@ -247,9 +289,7 @@ def upload_document(
     summary="获取文献列表",
 )
 def list_documents(
-    service: DocumentService = Depends(
-        get_document_service
-    ),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentListResponse:
     return service.list_documents()
 
@@ -261,14 +301,10 @@ def list_documents(
 )
 def get_document(
     document_id: str,
-    service: DocumentService = Depends(
-        get_document_service
-    ),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentIndexResult:
     try:
-        return service.get_document(
-            document_id
-        )
+        return service.get_document(document_id)
 
     except ValueError as exc:
         raise HTTPException(
@@ -291,23 +327,16 @@ def get_document(
 def delete_document(
     document_id: str,
     confirm: bool = False,
-    service: DocumentService = Depends(
-        get_document_service
-    ),
+    service: DocumentService = Depends(get_document_service),
 ) -> DocumentDeleteResult:
     if not confirm:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "删除操作需要明确设置 "
-                "confirm=true"
-            ),
+            detail=("删除操作需要明确设置 confirm=true"),
         )
 
     try:
-        return service.delete_document(
-            document_id
-        )
+        return service.delete_document(document_id)
 
     except ValueError as exc:
         raise HTTPException(
@@ -335,14 +364,10 @@ def delete_document(
 )
 def get_document_tables(
     document_id: str,
-    service: TableAnalysisService = Depends(
-        get_table_analysis_service
-    ),
+    service: TableAnalysisService = Depends(get_table_analysis_service),
 ) -> DocumentTablesResponse:
     try:
-        return service.get_document_tables(
-            document_id
-        )
+        return service.get_document_tables(document_id)
 
     except ValueError as exc:
         raise HTTPException(
@@ -364,16 +389,10 @@ def get_document_tables(
 )
 def get_document_source(
     document_id: str,
-    service: DocumentService = Depends(
-        get_document_service
-    ),
+    service: DocumentService = Depends(get_document_service),
 ) -> FileResponse:
     try:
-        source_path = (
-            service.get_source_path(
-                document_id
-            )
-        )
+        source_path = service.get_source_path(document_id)
 
         return FileResponse(
             path=source_path,
@@ -400,17 +419,13 @@ def get_document_source(
 )
 def analyze_experiments(
     request: ExperimentAnalysisRequest,
-    service: ExperimentAnalysisService = Depends(
-        get_experiment_analysis_service
-    ),
+    service: ExperimentAnalysisService = Depends(get_experiment_analysis_service),
 ) -> ExperimentAnalysisResult:
     try:
         return service.analyze(
             document_ids=request.document_ids,
             focus=request.focus,
-            top_k_per_document=(
-                request.top_k_per_document
-            ),
+            top_k_per_document=(request.top_k_per_document),
         )
 
     except FileNotFoundError as exc:
@@ -428,10 +443,7 @@ def analyze_experiments(
     except APIError as exc:
         raise HTTPException(
             status_code=502,
-            detail=(
-                "实验分析模型调用失败："
-                f"{exc}"
-            ),
+            detail=(f"实验分析模型调用失败：{exc}"),
         ) from exc
 
     except RuntimeError as exc:
