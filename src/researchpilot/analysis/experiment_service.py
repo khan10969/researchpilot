@@ -21,6 +21,10 @@ from researchpilot.documents.service import (
 from researchpilot.llm_utils import (
     retry_structured_output,
 )
+from researchpilot.observability import (
+    get_logger,
+    timed_stage,
+)
 from researchpilot.retrieval.embeddings import (
     EmbeddingService,
 )
@@ -28,23 +32,13 @@ from researchpilot.storage.qdrant_store import (
     QdrantStore,
 )
 
+logger = get_logger(__name__)
+
 EXPERIMENT_SEARCH_QUERIES = [
-    (
-        "研究任务 方法 模型 算法流程 "
-        "特征提取 技术方案"
-    ),
-    (
-        "实验设置 数据集 样本数量 "
-        "训练集 测试集 参数设置"
-    ),
-    (
-        "评价指标 基线方法 对比方法 "
-        "实验结果 性能 精度"
-    ),
-    (
-        "消融实验 鲁棒性 局限性 "
-        "误差分析 失败案例"
-    ),
+    ("研究任务 方法 模型 算法流程 特征提取 技术方案"),
+    ("实验设置 数据集 样本数量 训练集 测试集 参数设置"),
+    ("评价指标 基线方法 对比方法 实验结果 性能 精度"),
+    ("消融实验 鲁棒性 局限性 误差分析 失败案例"),
 ]
 
 
@@ -107,25 +101,16 @@ class ExperimentAnalysisService:
         table_service: TableAnalysisService,
     ) -> None:
         if settings.llm_api_key is None:
-            raise RuntimeError(
-                "没有配置 LLM_API_KEY"
-            )
+            raise RuntimeError("没有配置 LLM_API_KEY")
 
-        self.embedding_service = (
-            embedding_service
-        )
+        self.embedding_service = embedding_service
 
         self.store = store
-        self.document_service = (
-            document_service
-        )
+        self.document_service = document_service
         self.table_service = table_service
 
         self.llm_client = OpenAI(
-            api_key=(
-                settings.llm_api_key
-                .get_secret_value()
-            ),
+            api_key=(settings.llm_api_key.get_secret_value()),
             base_url=settings.llm_base_url,
             timeout=180.0,
             max_retries=2,
@@ -171,22 +156,14 @@ class ExperimentAnalysisService:
                     )
                 )
 
-                existing = candidates.get(
-                    chunk_id
-                )
+                existing = candidates.get(chunk_id)
 
-                if (
-                    existing is None
-                    or float(point.score)
-                    > float(existing.score)
-                ):
+                if existing is None or float(point.score) > float(existing.score):
                     candidates[chunk_id] = point
 
         ranked = sorted(
             candidates.values(),
-            key=lambda item: float(
-                item.score
-            ),
+            key=lambda item: float(item.score),
             reverse=True,
         )
 
@@ -202,14 +179,10 @@ class ExperimentAnalysisService:
         lines = ["[结构化表格]"]
 
         if caption:
-            lines.append(
-                f"表题：{caption}"
-            )
+            lines.append(f"表题：{caption}")
 
         for row in rows:
-            lines.append(
-                " | ".join(row)
-            )
+            lines.append(" | ".join(row))
 
         return "\n".join(lines)
 
@@ -227,46 +200,29 @@ class ExperimentAnalysisService:
         documents: dict[str, str] = {}
 
         for document_id in document_ids:
-            metadata = (
-                self.document_service.get_document(
-                    document_id
-                )
-            )
+            metadata = self.document_service.get_document(document_id)
 
-            documents[document_id] = (
-                metadata.filename
-            )
+            documents[document_id] = metadata.filename
 
-        search_queries = list(
-            EXPERIMENT_SEARCH_QUERIES
-        )
+        search_queries = list(EXPERIMENT_SEARCH_QUERIES)
 
         if focus:
             search_queries.append(focus)
 
         # 相同查询向量可供所有文献复用
         query_vectors = [
-            self.embedding_service.encode_query(
-                query
-            )
-            for query in search_queries
+            self.embedding_service.encode_query(query) for query in search_queries
         ]
 
-        evidences: list[
-            AnalysisEvidence
-        ] = []
+        evidences: list[AnalysisEvidence] = []
 
         for document_id in document_ids:
-            source_file = documents[
-                document_id
-            ]
+            source_file = documents[document_id]
 
-            text_points = (
-                self._collect_text_points(
-                    document_id=document_id,
-                    query_vectors=query_vectors,
-                    limit=top_k_per_document,
-                )
+            text_points = self._collect_text_points(
+                document_id=document_id,
+                query_vectors=query_vectors,
+                limit=top_k_per_document,
             )
 
             for point in text_points:
@@ -274,12 +230,8 @@ class ExperimentAnalysisService:
 
                 evidences.append(
                     AnalysisEvidence(
-                        evidence_id=(
-                            len(evidences) + 1
-                        ),
-                        evidence_type=(
-                            "text_chunk"
-                        ),
+                        evidence_id=(len(evidences) + 1),
+                        evidence_type=("text_chunk"),
                         document_id=document_id,
                         source_file=source_file,
                         section=str(
@@ -288,15 +240,9 @@ class ExperimentAnalysisService:
                                 "未知章节",
                             )
                         ),
-                        page_start=payload.get(
-                            "page_start"
-                        ),
-                        page_end=payload.get(
-                            "page_end"
-                        ),
-                        retrieval_score=float(
-                            point.score
-                        ),
+                        page_start=payload.get("page_start"),
+                        page_end=payload.get("page_end"),
+                        retrieval_score=float(point.score),
                         text=str(
                             payload.get(
                                 "text",
@@ -315,50 +261,29 @@ class ExperimentAnalysisService:
                 )
 
             # 表格不依赖向量排名，直接读取确定性结构
-            table_response = (
-                self.table_service
-                .get_document_tables(
-                    document_id
-                )
-            )
+            table_response = self.table_service.get_document_tables(document_id)
 
-            table_limit = (
-                settings
-                .analysis_max_tables_per_document
-            )
+            table_limit = settings.analysis_max_tables_per_document
 
-            for table in (
-                table_response.tables[
-                    :table_limit
-                ]
-            ):
+            for table in table_response.tables[:table_limit]:
                 source_locations = []
 
                 if table.page_no is not None:
                     source_locations.append(
                         {
-                            "source_ref": (
-                                table.source_ref
-                            ),
-                            "page_no": (
-                                table.page_no
-                            ),
+                            "source_ref": (table.source_ref),
+                            "page_no": (table.page_no),
                             "bbox": table.bbox,
                         }
                     )
 
                 evidences.append(
                     AnalysisEvidence(
-                        evidence_id=(
-                            len(evidences) + 1
-                        ),
+                        evidence_id=(len(evidences) + 1),
                         evidence_type="table",
                         document_id=document_id,
                         source_file=source_file,
-                        section=(
-                            table.caption
-                            or "结构化表格"
-                        ),
+                        section=(table.caption or "结构化表格"),
                         page_start=table.page_no,
                         page_end=table.page_no,
                         retrieval_score=None,
@@ -366,13 +291,9 @@ class ExperimentAnalysisService:
                             caption=table.caption,
                             rows=table.rows,
                         ),
-                        source_ref=(
-                            table.source_ref
-                        ),
+                        source_ref=(table.source_ref),
                         bbox=table.bbox,
-                        source_locations=(
-                            source_locations
-                        ),
+                        source_locations=(source_locations),
                     )
                 )
 
@@ -380,9 +301,7 @@ class ExperimentAnalysisService:
 
     @staticmethod
     def _build_context(
-        evidences: list[
-            AnalysisEvidence
-        ],
+        evidences: list[AnalysisEvidence],
     ) -> str:
         """
         生成发送给 DeepSeek 的上下文。
@@ -396,27 +315,13 @@ class ExperimentAnalysisService:
         for evidence in evidences:
             context.append(
                 {
-                    "evidence_id": (
-                        evidence.evidence_id
-                    ),
-                    "evidence_type": (
-                        evidence.evidence_type
-                    ),
-                    "document_id": (
-                        evidence.document_id
-                    ),
-                    "source_file": (
-                        evidence.source_file
-                    ),
-                    "section": (
-                        evidence.section
-                    ),
-                    "page_start": (
-                        evidence.page_start
-                    ),
-                    "page_end": (
-                        evidence.page_end
-                    ),
+                    "evidence_id": (evidence.evidence_id),
+                    "evidence_type": (evidence.evidence_type),
+                    "document_id": (evidence.document_id),
+                    "source_file": (evidence.source_file),
+                    "section": (evidence.section),
+                    "page_start": (evidence.page_start),
+                    "page_end": (evidence.page_end),
                     "text": evidence.text,
                 }
             )
@@ -441,163 +346,83 @@ class ExperimentAnalysisService:
         text = raw_text.strip()
 
         if not text:
-            raise RuntimeError(
-                "模型返回了空的实验分析内容"
-            )
+            raise RuntimeError("模型返回了空的实验分析内容")
 
         object_start = text.find("{")
         object_end = text.rfind("}")
 
-        if (
-            object_start == -1
-            or object_end == -1
-            or object_end < object_start
-        ):
-            raise RuntimeError(
-                "模型输出中没有完整的 JSON 对象"
-            )
+        if object_start == -1 or object_end == -1 or object_end < object_start:
+            raise RuntimeError("模型输出中没有完整的 JSON 对象")
 
-        return text[
-            object_start : object_end + 1
-        ]
+        return text[object_start : object_end + 1]
 
     @staticmethod
     def _claim_lists(
         summary: DocumentExperimentSummary,
-    ) -> list[
-        list[
-            EvidenceBackedClaim
-            | AnalysisLimitation
-        ]
-    ]:
-        return [
-            getattr(summary, field_name)
-            for field_name
-            in SUMMARY_CLAIM_FIELDS
-        ]
+    ) -> list[list[EvidenceBackedClaim | AnalysisLimitation]]:
+        return [getattr(summary, field_name) for field_name in SUMMARY_CLAIM_FIELDS]
 
     def _validate_analysis(
         self,
         analysis: ExperimentAnalysis,
-        evidences: list[
-            AnalysisEvidence
-        ],
+        evidences: list[AnalysisEvidence],
         documents: dict[str, str],
     ) -> None:
         """校验证据编号和文献归属。"""
 
-        evidence_by_id = {
-            evidence.evidence_id: evidence
-            for evidence in evidences
-        }
+        evidence_by_id = {evidence.evidence_id: evidence for evidence in evidences}
 
-        valid_ids = set(
-            evidence_by_id
-        )
+        valid_ids = set(evidence_by_id)
 
         def validate_ids(
             evidence_ids: list[int],
         ) -> None:
-            invalid_ids = (
-                set(evidence_ids)
-                - valid_ids
-            )
+            invalid_ids = set(evidence_ids) - valid_ids
 
             if invalid_ids:
-                raise RuntimeError(
-                    "模型引用了不存在的证据："
-                    f"{sorted(invalid_ids)}"
-                )
+                raise RuntimeError(f"模型引用了不存在的证据：{sorted(invalid_ids)}")
 
         seen_documents: set[str] = set()
 
-        for summary in (
-            analysis.document_summaries
-        ):
-            if (
-                summary.document_id
-                not in documents
-            ):
-                raise RuntimeError(
-                    "模型返回了未请求的文献："
-                    f"{summary.document_id}"
-                )
+        for summary in analysis.document_summaries:
+            if summary.document_id not in documents:
+                raise RuntimeError(f"模型返回了未请求的文献：{summary.document_id}")
 
-            if (
-                summary.document_id
-                in seen_documents
-            ):
-                raise RuntimeError(
-                    "模型重复返回文献摘要："
-                    f"{summary.document_id}"
-                )
+            if summary.document_id in seen_documents:
+                raise RuntimeError(f"模型重复返回文献摘要：{summary.document_id}")
 
-            seen_documents.add(
-                summary.document_id
-            )
+            seen_documents.add(summary.document_id)
 
             # 文件名由本地可信元数据覆盖，
             # 不采用模型可能改写后的名称。
-            summary.source_file = documents[
-                summary.document_id
-            ]
+            summary.source_file = documents[summary.document_id]
 
-            for claim_list in (
-                self._claim_lists(summary)
-            ):
+            for claim_list in self._claim_lists(summary):
                 for claim in claim_list:
-                    validate_ids(
-                        claim.evidence_ids
-                    )
+                    validate_ids(claim.evidence_ids)
 
-                    for evidence_id in (
-                        claim.evidence_ids
-                    ):
-                        evidence = (
-                            evidence_by_id[
-                                evidence_id
-                            ]
-                        )
+                    for evidence_id in claim.evidence_ids:
+                        evidence = evidence_by_id[evidence_id]
 
-                        if (
-                            evidence.document_id
-                            != summary.document_id
-                        ):
-                            raise RuntimeError(
-                                "单篇文献摘要引用了"
-                                "其他文献的证据"
-                            )
+                        if evidence.document_id != summary.document_id:
+                            raise RuntimeError("单篇文献摘要引用了其他文献的证据")
 
-        missing_documents = (
-            set(documents)
-            - seen_documents
-        )
+        missing_documents = set(documents) - seen_documents
 
         if missing_documents:
-            raise RuntimeError(
-                "模型遗漏了文献摘要："
-                f"{sorted(missing_documents)}"
-            )
+            raise RuntimeError(f"模型遗漏了文献摘要：{sorted(missing_documents)}")
 
-        for comparison in (
-            analysis.comparisons
-        ):
-            validate_ids(
-                comparison.evidence_ids
-            )
+        for comparison in analysis.comparisons:
+            validate_ids(comparison.evidence_ids)
 
-        validate_ids(
-            analysis.overall_evidence_ids
-        )
+        validate_ids(analysis.overall_evidence_ids)
 
         if (
             analysis.sufficient_evidence
             and analysis.overall_conclusion
             and not analysis.overall_evidence_ids
         ):
-            raise RuntimeError(
-                "总体结论缺少证据引用"
-            )
+            raise RuntimeError("总体结论缺少证据引用")
 
     def analyze(
         self,
@@ -607,19 +432,25 @@ class ExperimentAnalysisService:
     ) -> ExperimentAnalysisResult:
         """执行一次实验结果分析。"""
 
-        limit = (
-            top_k_per_document
-            or settings
-            .analysis_top_k_per_document
-        )
+        limit = top_k_per_document or settings.analysis_top_k_per_document
 
-        evidences, documents = (
-            self._collect_evidences(
+        # evidences, documents = (
+        #     self._collect_evidences(
+        #         document_ids=document_ids,
+        #         focus=focus,
+        #         top_k_per_document=limit,
+        #     )
+        # )
+        with timed_stage(
+            logger,
+            "experiment_evidence_collection",
+            document_count=len(document_ids),
+        ):
+            evidences, documents = self._collect_evidences(
                 document_ids=document_ids,
                 focus=focus,
                 top_k_per_document=limit,
             )
-        )
 
         if not evidences:
             return ExperimentAnalysisResult(
@@ -629,13 +460,9 @@ class ExperimentAnalysisService:
                     sufficient_evidence=False,
                     document_summaries=[],
                     comparisons=[],
-                    overall_conclusion=(
-                        "没有找到可用于实验分析的证据。"
-                    ),
+                    overall_conclusion=("没有找到可用于实验分析的证据。"),
                     overall_evidence_ids=[],
-                    limitations=[
-                        "当前文献没有可用正文或表格。"
-                    ],
+                    limitations=["当前文献没有可用正文或表格。"],
                 ),
                 evidences=[],
             )
@@ -645,25 +472,24 @@ class ExperimentAnalysisService:
                 "document_id": document_id,
                 "source_file": filename,
             }
-            for document_id, filename
-            in documents.items()
+            for document_id, filename in documents.items()
         ]
 
-#         user_input = f"""
-# 分析目标：
-#
-# {focus or "提取并比较方法、数据集、实验设置、评价指标、基线方法和主要实验结果"}
-#
-# 需要分析的文献：
-#
-# {json.dumps(document_catalog, ensure_ascii=False, indent=2)}
-#
-# 实验相关证据：
-#
-# {self._build_context(evidences)}
-#
-# 请依据证据完成单篇实验摘要和跨文献比较。
-# """.strip()
+        #         user_input = f"""
+        # 分析目标：
+        #
+        # {focus or "提取并比较方法、数据集、实验设置、评价指标、基线方法和主要实验结果"}
+        #
+        # 需要分析的文献：
+        #
+        # {json.dumps(document_catalog, ensure_ascii=False, indent=2)}
+        #
+        # 实验相关证据：
+        #
+        # {self._build_context(evidences)}
+        #
+        # 请依据证据完成单篇实验摘要和跨文献比较。
+        # """.strip()
         user_input = f"""
         分析目标：
 
@@ -682,11 +508,13 @@ class ExperimentAnalysisService:
 
         需要分析的文献：
 
-        {json.dumps(
-            document_catalog,
-            ensure_ascii=False,
-            indent=2,
-        )}
+        {
+            json.dumps(
+                document_catalog,
+                ensure_ascii=False,
+                indent=2,
+            )
+        }
 
         实验相关证据：
 
@@ -748,25 +576,17 @@ class ExperimentAnalysisService:
         # )
         def generate_analysis() -> ExperimentAnalysis:
             response = self.llm_client.responses.create(
-                model=(
-                        settings.analysis_model
-                        or settings.llm_model
-                ),
+                model=(settings.analysis_model or settings.llm_model),
                 instructions=SYSTEM_INSTRUCTIONS,
                 input=user_input,
                 text={
                     "format": {
                         "type": "json_schema",
                         "name": "experiment_analysis",
-                        "schema": (
-                            ExperimentAnalysis
-                            .model_json_schema()
-                        ),
+                        "schema": (ExperimentAnalysis.model_json_schema()),
                     }
                 },
-                max_output_tokens=(
-                    settings.analysis_max_output_tokens
-                ),
+                max_output_tokens=(settings.analysis_max_output_tokens),
                 temperature=settings.llm_temperature,
                 reasoning={
                     "effort": "none",
@@ -775,14 +595,9 @@ class ExperimentAnalysisService:
 
             raw_output = response.output_text or ""
 
-            json_output = self._extract_json_object(
-                raw_output
-            )
+            json_output = self._extract_json_object(raw_output)
 
-            parsed_analysis = (
-                ExperimentAnalysis
-                .model_validate_json(json_output)
-            )
+            parsed_analysis = ExperimentAnalysis.model_validate_json(json_output)
 
             self._validate_analysis(
                 analysis=parsed_analysis,
@@ -792,15 +607,24 @@ class ExperimentAnalysisService:
 
             return parsed_analysis
 
-        parsed = retry_structured_output(
-            generate_analysis,
-            attempts=(
-                settings.llm_structured_max_attempts
-            ),
-            label="实验结果分析",
-        )
-
-
+        # parsed = retry_structured_output(
+        #     generate_analysis,
+        #     attempts=(
+        #         settings.llm_structured_max_attempts
+        #     ),
+        #     label="实验结果分析",
+        # )
+        with timed_stage(
+            logger,
+            "experiment_generation",
+            document_count=len(document_ids),
+            evidence_count=len(evidences),
+        ):
+            parsed = retry_structured_output(
+                generate_analysis,
+                attempts=(settings.llm_structured_max_attempts),
+                label="实验结果分析",
+            )
 
         return ExperimentAnalysisResult(
             document_ids=document_ids,
